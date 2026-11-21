@@ -1,0 +1,20 @@
+[package]
+name = "hephaestus-store-sqlite"
+description = "SQLite WAL catalog, idempotency ledger, Decision/Observation log storage, and Zstd LTX snapshots for Hephaestus."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+hephaestus-core.workspace = true
+hephaestus-store.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+zstd.workspace = true
