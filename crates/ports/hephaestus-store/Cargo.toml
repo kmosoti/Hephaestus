@@ -1,0 +1,18 @@
+[package]
+name = "hephaestus-store"
+description = "Driven storage, catalog, log, and webhook port contracts for Hephaestus."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bytes.workspace = true
+hephaestus-core.workspace = true
+serde.workspace = true
+thiserror.workspace = true
