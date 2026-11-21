@@ -1,0 +1,25 @@
+[package]
+name = "hephaestus-store-object"
+description = "Object storage adapters for Hephaestus: Apache Arrow object_store (LocalFS/S3/R2/GCS), native-IPv6 GoogleDriveStore, packed CAS engine, and webhook sink."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bytes.workspace = true
+hephaestus-core.workspace = true
+hephaestus-store.workspace = true
+object_store.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
