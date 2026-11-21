@@ -12,7 +12,38 @@ required_lints = [
 ]
 
 # Core crates under crates/core/ must be registered here.
-[crates]
+[crates.hephaestus-core]
+
+# Explicitly allowlisted pure no_std dependencies and their transitive closure.
+[allow.base64]
+default_features = false
+features = ["alloc"]
+transitive = []
+
+[allow.blake3]
+default_features = false
+features = ["pure"]
+transitive = ["arrayvec", "cfg-if", "constant_time_eq", "cpufeatures"]
+
+[allow.ruzstd]
+default_features = false
+features = ["hash"]
+transitive = ["twox-hash"]
+
+[allow.serde]
+default_features = false
+features = ["alloc", "derive"]
+transitive = ["proc-macro2", "quote", "serde_core", "serde_derive", "syn", "unicode-ident"]
+
+[allow.sha2]
+default_features = false
+features = []
+transitive = ["block-buffer", "cfg-if", "cpufeatures", "crypto-common", "digest", "hybrid-array", "typenum"]
+
+[allow.thiserror]
+default_features = false
+features = []
+transitive = ["proc-macro2", "quote", "syn", "thiserror-impl", "unicode-ident"]
 
 # Denied dependency classes: never allowed directly or transitively in crates/core/.
 [deny]
