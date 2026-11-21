@@ -5,6 +5,8 @@ members = [
     "crates/ports/hephaestus-store",
     "crates/adapters/hephaestus-store-sqlite",
     "crates/adapters/hephaestus-store-object",
+    "crates/adapters/hephaestus-jj",
+    "crates/bin/hephaestus-server",
     "crates/bin/hephaestus-xtask",
 ]
 
@@ -26,20 +28,31 @@ all = { level = "warn", priority = -1 }
 [workspace.dependencies]
 hephaestus-core = { path = "crates/core/hephaestus-core" }
 hephaestus-store = { path = "crates/ports/hephaestus-store" }
+hephaestus-store-sqlite = { path = "crates/adapters/hephaestus-store-sqlite" }
+hephaestus-store-object = { path = "crates/adapters/hephaestus-store-object" }
+hephaestus-jj = { path = "crates/adapters/hephaestus-jj" }
+async-trait = "0.1.92"
 axum = "0.8.9"
 base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
 blake3 = { version = "1.8.7", default-features = false, features = ["pure"] }
 bytes = "1.11.1"
 flate2 = "1.1.11"
+futures = "0.3.34"
+gix = { version = "0.90.0", default-features = false }
+hex = "0.4.3"
+jj-lib = "0.47.1"
 object_store = { version = "0.14.2", features = ["fs", "aws", "gcp"] }
+quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring", "log", "bloom"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "ring", "pem"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
 rusqlite = { version = "0.41.1", features = ["bundled", "backup"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 ruzstd = { version = "0.9.1", default-features = false, features = ["hash"] }
 serde = { version = "1.0.229", default-features = false, features = ["alloc", "derive"] }
 serde_json = "1.0.154"
 sha2 = { version = "0.11.1", default-features = false }
 tar = "0.4.46"
 thiserror = { version = "2.0.21", default-features = false }
-tokio = { version = "1.54.1", features = ["rt", "rt-multi-thread", "macros", "time", "net", "fs", "sync"] }
+tokio = { version = "1.54.1", features = ["rt", "rt-multi-thread", "macros", "time", "net", "fs", "sync", "process", "io-util"] }
 toml = "1.2.1"
 zstd = "0.14.3"
