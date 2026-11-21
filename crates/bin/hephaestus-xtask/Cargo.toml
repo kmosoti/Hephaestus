@@ -1,0 +1,21 @@
+[package]
+name = "hephaestus-xtask"
+description = "Hephaestus workspace verification, layer/purity gates, and Debian/tarball packaging."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+flate2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tar.workspace = true
+toml.workspace = true
+zstd.workspace = true

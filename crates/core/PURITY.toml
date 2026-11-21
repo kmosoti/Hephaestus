@@ -1,0 +1,25 @@
+# Core purity policy enforced by `cargo xtask check-core-purity`.
+
+[policy]
+no_std = true
+build_scripts = false
+required_lints = [
+    "clippy::unwrap_used",
+    "clippy::expect_used",
+    "clippy::panic",
+    "clippy::todo",
+    "clippy::unimplemented",
+]
+
+# Core crates under crates/core/ must be registered here.
+[crates]
+
+# Denied dependency classes: never allowed directly or transitively in crates/core/.
+[deny]
+async-runtime = ["tokio", "async-std", "smol", "futures-executor", "actix-rt"]
+network = ["reqwest", "hyper", "hyper-util", "tonic", "quinn", "quinn-proto", "quinn-udp", "rustls", "socket2", "mio", "axum"]
+filesystem = ["tempfile", "walkdir", "notify", "fs_extra", "camino", "rusqlite", "object_store", "jj-lib"]
+randomness = ["rand", "rand_core", "getrandom", "fastrand", "oorandom"]
+clock = ["chrono", "time", "instant", "coarsetime"]
+process = ["nix", "libc", "windows-sys", "rustix", "sysinfo", "procfs"]
+logging = ["log", "tracing", "env_logger", "slog"]

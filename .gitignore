@@ -1,0 +1,8 @@
+/target
+/dist
+/*.deb
+/*.tar.zst
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.DS_Store

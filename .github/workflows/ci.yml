@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+      - "stack/**"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify Workspace & Gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: 1.100.0
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Check workspace locked
+        run: cargo check --workspace --locked
+      - name: Clippy lints
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Enforce hexagonal layers
+        run: cargo xtask check-layers
+      - name: Enforce core purity
+        run: cargo xtask check-core-purity
+      - name: Enforce SHA-pinned workflows
+        run: cargo xtask check-workflow-pins
+      - name: Run workspace test suite
+        run: cargo test --workspace --locked
+      - name: Scan for leaked local paths or key material
+        run: |
+          if rg -n '/home/[a-zA-Z0-9._-]+|age1[0-9a-z]{50,}|BEGIN .* PRIVATE KEY' .; then
+            echo "Forbidden local path or key material detected!"
+            exit 1
+          fi
