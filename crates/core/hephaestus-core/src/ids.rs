@@ -60,9 +60,19 @@ fn validate_id(kind: &'static str, raw: &str, allow_slash: bool) -> Result<Strin
 macro_rules! id_newtype {
     ($name:ident, $kind:literal, $allow_slash:expr, $doc:literal) => {
         #[doc = $doc]
-        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
         #[serde(transparent)]
         pub struct $name(String);
+
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                let raw = String::deserialize(deserializer)?;
+                Self::parse(&raw).map_err(serde::de::Error::custom)
+            }
+        }
 
         impl $name {
             /// Validates and constructs an identifier.

@@ -21,6 +21,7 @@ pub mod bundler;
 mod bundler_frames;
 pub mod cas;
 pub mod cdc;
+pub mod chain_verify;
 mod crc64;
 pub mod decision_log;
 pub mod ids;
@@ -39,9 +40,11 @@ pub use bao::{
 };
 pub use bundler::{
     BUNDLE_MAGIC_V1, BUNDLE_MAGIC_V2, BundleAccumulator, BundleDirectoryHeader, BundleEntry,
-    BundleError, BundleFrameDesc, INLINE_BLOB_THRESHOLD, MAX_FRAME_RAW_BYTES, SealedBundle,
-    TARGET_BUNDLE_MAX_BYTES, TARGET_BUNDLE_MIN_BYTES, bundle_frame_count,
-    parse_frame_directory_header, unpack_blob_from_bundle, unpack_blob_from_frame,
+    BundleError, BundleFrameDesc, INLINE_BLOB_THRESHOLD, MAX_BUNDLE_DIR_BYTES, MAX_BUNDLE_FRAMES,
+    MAX_FRAME_COMP_BYTES, MAX_FRAME_RAW_BYTES, MAX_FRAME_RAW_DECODED_BYTES,
+    MAX_LEGACY_V1_DECODED_BYTES, SealedBundle, TARGET_BUNDLE_MAX_BYTES, TARGET_BUNDLE_MIN_BYTES,
+    bundle_frame_count, parse_frame_directory_header, unpack_blob_from_bundle,
+    unpack_blob_from_frame,
 };
 pub use cas::{
     BlobDigest, BlobTier, IdempotencyKey, StreamKind, decode_hex, encode_hex, hash_bytes,
@@ -50,6 +53,9 @@ pub use cdc::{
     CdcChunk, FASTCDC_AVG_CHUNK, FASTCDC_MASK_L, FASTCDC_MASK_S, FASTCDC_MAX_CHUNK,
     FASTCDC_MIN_CHUNK, FastCdcConfig, GEAR_TABLE, chunk_bytes, chunk_bytes_with_config,
     next_chunk_len,
+};
+pub use chain_verify::{
+    DEFAULT_LOG_PAGE_LIMIT, DecisionChainVerifier, MAX_LOG_PAGE_LIMIT, ObservationChainVerifier,
 };
 pub use decision_log::{
     ChainError, DecisionDraft, DecisionRecord, DecisionStatus, GENESIS_HASH,

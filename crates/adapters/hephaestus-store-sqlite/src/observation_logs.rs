@@ -1,11 +1,12 @@
 //! Synchronous SQLite Orthogonal Observation Log storage, SQL predicate pushdown, and MMR proofs.
 
+use crate::log_rows::{decode_observation_row, parse_observation_row};
 use crate::mmr_store::{append_mmr_in_tx, query_inclusion_proof_sync};
 use crate::schema::{blob_to_digest, json_err, sqlite_err};
 use hephaestus_core::{
-    ChangeId, CommitId, GENESIS_HASH, IdempotencyKey, MmrProof, ObservationDraft,
-    ObservationFilter, ObservationKind, ObservationRecord, OpId, RepoId, StreamKind,
-    canonicalize_json, compute_observation_hash, verify_observation_chain,
+    DEFAULT_LOG_PAGE_LIMIT, GENESIS_HASH, IdempotencyKey, MAX_LOG_PAGE_LIMIT, MmrProof,
+    ObservationChainVerifier, ObservationDraft, ObservationFilter, ObservationRecord, RepoId,
+    StreamKind, canonicalize_json, compute_observation_hash,
 };
 use hephaestus_store::StoreError;
 use rusqlite::types::Value as SqlValue;
@@ -173,27 +174,9 @@ pub(crate) fn append_observation_idempotent_sync(
     Ok((rec, false))
 }
 
-type ObservationRow = (
-    i64,
-    String,
-    Vec<u8>,
-    Vec<u8>,
-    Vec<u8>,
-    String,
-    String,
-    String,
-    String,
-    String,
-    Option<i64>,
-    String,
-    Vec<u8>,
-    Option<String>,
-    String,
-    i64,
-);
-
 /// Pushes all [`ObservationFilter`] predicates directly into parameterized SQL leveraging
-/// `idx_observations_change`, `idx_observations_commit`, and `idx_observations_kind`.
+/// `idx_observations_change`, `idx_observations_commit`, and `idx_observations_kind`,
+/// always enforcing a bounded page `LIMIT`.
 pub(crate) fn query_observations_sync(
     conn: &Connection,
     repo_id: &RepoId,
@@ -229,78 +212,20 @@ pub(crate) fn query_observations_sync(
         sql.push_str(" AND seq >= ?");
         bind.push(SqlValue::Integer(since_seq as i64));
     }
-    sql.push_str(" ORDER BY seq ASC");
-    if let Some(limit) = filter.limit {
-        sql.push_str(" LIMIT ?");
-        bind.push(SqlValue::Integer(limit as i64));
-    }
+    let effective_limit = filter
+        .limit
+        .unwrap_or(DEFAULT_LOG_PAGE_LIMIT)
+        .min(MAX_LOG_PAGE_LIMIT);
+    sql.push_str(" ORDER BY seq ASC LIMIT ?");
+    bind.push(SqlValue::Integer(effective_limit as i64));
 
     let mut stmt = conn.prepare(&sql).map_err(sqlite_err)?;
     let rows = stmt
-        .query_map(
-            params_from_iter(bind),
-            |r| -> rusqlite::Result<ObservationRow> {
-                Ok((
-                    r.get(0)?,
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    r.get(4)?,
-                    r.get(5)?,
-                    r.get(6)?,
-                    r.get(7)?,
-                    r.get(8)?,
-                    r.get(9)?,
-                    r.get(10)?,
-                    r.get(11)?,
-                    r.get(12)?,
-                    r.get(13)?,
-                    r.get(14)?,
-                    r.get(15)?,
-                ))
-            },
-        )
+        .query_map(params_from_iter(bind), parse_observation_row)
         .map_err(sqlite_err)?;
     let mut out = Vec::new();
     for row in rows {
-        let (
-            seq,
-            obs_id,
-            prev,
-            rec_h,
-            mmr_h,
-            kind_s,
-            ch,
-            cm,
-            op,
-            prod,
-            passed_opt,
-            sum,
-            dig,
-            uri,
-            meta,
-            ts,
-        ) = row.map_err(sqlite_err)?;
-        let kind = ObservationKind::parse(&kind_s)
-            .ok_or_else(|| StoreError::Backend(format!("unknown observation kind `{kind_s}`")))?;
-        out.push(ObservationRecord {
-            seq: seq as u64,
-            prev_hash: blob_to_digest(&prev, "observations.prev_hash")?,
-            record_hash: blob_to_digest(&rec_h, "observations.record_hash")?,
-            mmr_root: blob_to_digest(&mmr_h, "observations.mmr_root")?,
-            observation_id: obs_id,
-            kind,
-            change_id: ChangeId::parse(&ch)?,
-            commit_id: CommitId::parse(&cm)?,
-            op_id: OpId::parse(&op)?,
-            producer: prod,
-            passed: passed_opt.map(|v| v != 0),
-            summary: sum,
-            payload_digest: blob_to_digest(&dig, "observations.payload_digest")?,
-            custody_uri: uri,
-            metadata_json: meta,
-            recorded_at_ms: ts as u64,
-        });
+        out.push(decode_observation_row(row.map_err(sqlite_err)?)?);
     }
     Ok(out)
 }
@@ -309,9 +234,39 @@ pub(crate) fn verify_observations_sync(
     conn: &Connection,
     repo_id: &RepoId,
 ) -> Result<u64, StoreError> {
-    let records = query_observations_sync(conn, repo_id, &ObservationFilter::default())?;
-    verify_observation_chain(&records)?;
-    Ok(records.len() as u64)
+    let tx = conn.unchecked_transaction().map_err(sqlite_err)?;
+    let (total_count, distinct_ids): (i64, i64) = tx
+        .query_row(
+            "SELECT COUNT(*), COUNT(DISTINCT observation_id) FROM observations WHERE repo_id = ?1",
+            params![repo_id.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(sqlite_err)?;
+    if total_count != distinct_ids {
+        return Err(StoreError::ChainViolation(
+            hephaestus_core::ChainError::DuplicateId {
+                id: "duplicate observation_id in repository".into(),
+            },
+        ));
+    }
+    let mut verifier = ObservationChainVerifier::new();
+    {
+        let mut stmt = tx
+            .prepare(
+                "SELECT seq, observation_id, prev_hash, record_hash, mmr_root, kind, change_id, commit_id,
+                        op_id, producer, passed, summary, payload_digest, custody_uri, metadata_json, recorded_at_ms
+                 FROM observations WHERE repo_id = ?1 ORDER BY seq ASC",
+            )
+            .map_err(sqlite_err)?;
+        let rows = stmt
+            .query_map(params![repo_id.as_str()], parse_observation_row)
+            .map_err(sqlite_err)?;
+        for row in rows {
+            let rec = decode_observation_row(row.map_err(sqlite_err)?)?;
+            verifier.step_with_options(&rec, false)?;
+        }
+    }
+    Ok(verifier.verified_count())
 }
 
 pub(crate) fn observation_inclusion_proof_sync(

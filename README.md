@@ -8,13 +8,14 @@
 
 ## Quickstart 1: Zero-Cloud Local Server
 
-Run Hephaestus locally with zero cloud credentials (`SqliteStore` WAL + `LocalFs` object storage over IPv6 loopback). For production, supply one or more `--allow-client-fp <64-hex-spki-sha256>` pins and `--tls-key-path` (or systemd `LoadCredentialEncrypted=tls-ed25519.pem`); pass `--dev-ephemeral` only for local development:
+Run Hephaestus locally with zero cloud credentials (`SqliteStore` WAL + `LocalFs` object storage over IPv6 loopback). For production, supply `--http-auth-token-file` (`0600`/`0400` regular file, verified in constant time via SHA-256), one or more `--allow-client-fp <64-hex-spki-sha256>` pins, and `--tls-key-path` (or systemd `LoadCredentialEncrypted=tls-ed25519.pem`); pass `--dev-ephemeral` and `--allow-unauthenticated-loopback-http` only for local development:
 
 ```sh
 cargo run --locked -p hephaestus-server -- \
   --http-bind [::1]:8081 \
   --quic-bind [::1]:8443 \
   --data-dir ./hephaestus-data \
+  --allow-unauthenticated-loopback-http \
   --dev-ephemeral
 ```
 
@@ -48,6 +49,7 @@ hephaestus-server \
   --http-bind '[::1]:8081' \
   --quic-bind '[::1]:8443' \
   --data-dir /var/lib/hephaestus \
+  --http-auth-token-file /run/secrets/hephaestus-http-token \
   --object-uri 's3://my-hephaestus-cas/prod' \
   --allow-client-fp '<64-hex-spki-sha256>'
 ```
@@ -62,6 +64,7 @@ hephaestus-server \
   --http-bind '[::1]:8081' \
   --quic-bind '[::1]:8443' \
   --data-dir /var/lib/hephaestus \
+  --http-auth-token-file /run/secrets/hephaestus-http-token \
   --drive-url '' \
   --allow-client-fp '<64-hex-spki-sha256>'
 ```
@@ -79,7 +82,7 @@ curl -sS -g 'http://[::1]:8081/v1/observations/example%2Frepo/verify' | jq .
 curl -sS -g 'http://[::1]:8081/v1/decisions/example%2Frepo/verify' | jq .
 ```
 
-Programmatic QUIC clients connect with `HephaestusQuicClient::connect(quic_addr, &client_identity, server_spki_pin)` over pure IPv6 with chunked streaming up to 64 MiB.
+Programmatic QUIC clients connect with `HephaestusQuicClient::connect(quic_addr, &client_identity, server_spki_pin)` over pure IPv6 with chunked streaming up to 16 MiB and a weighted 64 MiB aggregate inflight byte budget.
 
 ## Native Jujutsu CAS Backend & Streaming Git Smart-HTTP Bridge
 
@@ -98,6 +101,7 @@ Import `nixosModules.hephaestus` from [flake.nix](flake.nix) (see [nix/modules/h
     enable = true;
     httpListenAddress = "[fd00:db8::1]:8081";
     quicListenAddress = "[fd00:db8::1]:8443";
+    httpAuthTokenFile = "/run/secrets/hephaestus-http-token";
     tlsKeyEncryptedFile = /etc/credstore.encrypted/hephaestus-tls-ed25519.cred;
     ltxIntervalSecs = 300;
     allowClientFingerprints = [

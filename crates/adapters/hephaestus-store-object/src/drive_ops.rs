@@ -57,16 +57,16 @@ impl DriveHttpError {
         }
     }
 
-    /// Converts into [`StoreError`].
+    /// Converts into [`StoreError`] without leaking raw upstream provider error bodies.
     #[must_use]
     pub fn into_store_error(self) -> StoreError {
         if self.status == 404 {
-            return StoreError::NotFound(self.detail);
+            return StoreError::NotFound("drive object not found".into());
         }
         if self.status == 429 || (self.status == 403 && is_rate_limit_403(&self.detail)) {
-            return StoreError::RateLimited(format!("Drive HTTP {}: {}", self.status, self.detail));
+            return StoreError::RateLimited(format!("Drive HTTP {} rate limited", self.status));
         }
-        StoreError::Backend(format!("Drive HTTP {}: {}", self.status, self.detail))
+        StoreError::Backend(format!("Drive HTTP {} error", self.status))
     }
 }
 

@@ -13,6 +13,7 @@ use hephaestus_store_object::PackedCasEngine;
 use hephaestus_store_sqlite::SqliteStore;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 fn now_unix_ms() -> u64 {
@@ -45,6 +46,7 @@ pub struct HephaestusEngine {
     jj_service: JjRepoService,
     git_bridge: GitSmartHttpBridge,
     jj_repo_root: Option<PathBuf>,
+    pub(crate) last_restored_txid: AtomicU64,
 }
 
 impl HephaestusEngine {
@@ -65,6 +67,7 @@ impl HephaestusEngine {
             jj_service,
             git_bridge,
             jj_repo_root,
+            last_restored_txid: AtomicU64::new(0),
         }
     }
 
@@ -110,6 +113,12 @@ impl HephaestusEngine {
     #[must_use]
     pub fn sqlite(&self) -> &SqliteStore {
         &self.sqlite
+    }
+
+    /// Returns a reference to [`PackedCasEngine`].
+    #[must_use]
+    pub fn cas(&self) -> &PackedCasEngine {
+        &self.cas
     }
 
     /// Returns object backend kind string (`localfs`, `s3`, `gcs`, `google-drive`, `memory`).
@@ -216,13 +225,26 @@ impl HephaestusEngine {
             .await
     }
 
-    /// Lists Decision Log records for `repo_id`, optionally filtered by `ChangeId`.
+    /// Lists Decision Log records for `repo_id`, optionally filtered by `ChangeId` (capped page).
     pub async fn list_decisions(
         &self,
         repo_id: &RepoId,
         change_id: Option<&ChangeId>,
     ) -> Result<Vec<DecisionRecord>, StoreError> {
         self.sqlite.list_decisions(repo_id, change_id).await
+    }
+
+    /// Queries paginated Decision Log records for `repo_id`.
+    pub async fn query_decisions(
+        &self,
+        repo_id: &RepoId,
+        change_id: Option<&ChangeId>,
+        since_seq: Option<u64>,
+        limit: Option<usize>,
+    ) -> Result<Vec<DecisionRecord>, StoreError> {
+        self.sqlite
+            .query_decisions(repo_id, change_id, since_seq, limit)
+            .await
     }
 
     /// Verifies `repo_id`'s Decision Log hash chain and MMR roots.
@@ -299,11 +321,7 @@ impl HephaestusEngine {
     /// Exports a real Zstd-compressed `"LTX1"` snapshot, records `ltx_snapshots`, and uploads it
     /// to [`hephaestus_store::ObjectBackend`].
     pub async fn ship_ltx_snapshot(&self) -> Result<String, StoreError> {
-        let payload = self.sqlite.export_ltx_snapshot_zstd().await?;
-        let count = self.sqlite.ltx_snapshot_count().await?;
-        let key = format!("ltx/snapshot-{count:08}-{}.ltx.zst", now_unix_ms());
-        let obj = self.cas.object_backend().put_bundle(&key, payload).await?;
-        Ok(obj.object_id)
+        self.ship_ltx_snapshot_manifest().await.map(|r| r.object_id)
     }
 }
 

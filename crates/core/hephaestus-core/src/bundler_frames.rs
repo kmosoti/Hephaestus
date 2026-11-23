@@ -1,7 +1,9 @@
 //! Framed Zstd encoding/decoding helpers for `GRNB0002` and legacy `GRNB0001` bundles.
 
 use crate::bundler::{
-    BUNDLE_MAGIC_V1, BUNDLE_MAGIC_V2, BundleError, DIR_HEADER_LEN, FRAME_DESC_LEN, zstd_err,
+    BUNDLE_MAGIC_V1, BUNDLE_MAGIC_V2, BundleError, DIR_HEADER_LEN, FRAME_DESC_LEN,
+    MAX_BUNDLE_DIR_BYTES, MAX_BUNDLE_FRAMES, MAX_FRAME_COMP_BYTES, MAX_FRAME_RAW_DECODED_BYTES,
+    MAX_LEGACY_V1_DECODED_BYTES, zstd_err,
 };
 use alloc::vec::Vec;
 use ruzstd::decoding::StreamingDecoder;
@@ -89,7 +91,10 @@ impl BundleDirectoryHeader {
         if local_end > frame.raw_len as usize {
             return Err(oob(offset, len, total));
         }
-        if frame.comp_offset < self.dir_len as u64 {
+        if frame.comp_offset < self.dir_len as u64
+            || frame.raw_len as usize > MAX_FRAME_RAW_DECODED_BYTES
+            || frame.comp_len as usize > MAX_FRAME_COMP_BYTES
+        {
             return Err(BundleError::InvalidFormat);
         }
         Ok((frame, local_off))
@@ -123,21 +128,45 @@ pub fn bundle_frame_count(compressed_bytes: &[u8]) -> Option<usize> {
 /// caller's initial range probe was shorter than the frame directory.
 pub fn parse_frame_directory_header(prefix: &[u8]) -> Result<BundleDirectoryHeader, BundleError> {
     let frame_count = bundle_frame_count(prefix).ok_or(BundleError::InvalidFormat)?;
-    if frame_count == 0 {
+    if frame_count == 0 || frame_count > MAX_BUNDLE_FRAMES {
         return Err(BundleError::InvalidFormat);
     }
     let dir_len = frame_count
         .checked_mul(FRAME_DESC_LEN)
         .and_then(|n| n.checked_add(DIR_HEADER_LEN))
         .ok_or(BundleError::InvalidFormat)?;
+    if dir_len > MAX_BUNDLE_DIR_BYTES {
+        return Err(BundleError::InvalidFormat);
+    }
     if prefix.len() < dir_len {
         return Err(BundleError::TruncatedDirectory {
             required_bytes: dir_len,
         });
     }
-    let mut frames = Vec::with_capacity(frame_count);
+    let mut frames = Vec::new();
+    frames
+        .try_reserve_exact(frame_count)
+        .map_err(|_| BundleError::InvalidFormat)?;
+    let mut expected_raw_offset = 0u64;
+    let mut min_comp_offset = dir_len as u64;
     for idx in 0..frame_count {
-        frames.push(read_frame_desc(prefix, idx)?);
+        let desc = read_frame_desc(prefix, idx)?;
+        if desc.raw_len as usize > MAX_FRAME_RAW_DECODED_BYTES
+            || desc.comp_len as usize > MAX_FRAME_COMP_BYTES
+            || desc.raw_offset < expected_raw_offset
+            || desc.comp_offset < min_comp_offset
+        {
+            return Err(BundleError::InvalidFormat);
+        }
+        expected_raw_offset = desc
+            .raw_offset
+            .checked_add(u64::from(desc.raw_len))
+            .ok_or(BundleError::InvalidFormat)?;
+        min_comp_offset = desc
+            .comp_offset
+            .checked_add(u64::from(desc.comp_len))
+            .ok_or(BundleError::InvalidFormat)?;
+        frames.push(desc);
     }
     Ok(BundleDirectoryHeader {
         frame_count,
@@ -164,22 +193,30 @@ fn decode_zstd_frame(
     frame_bytes: &[u8],
     expected_raw_len: Option<usize>,
 ) -> Result<Vec<u8>, BundleError> {
+    let limit = match expected_raw_len {
+        Some(n) if n > MAX_FRAME_RAW_DECODED_BYTES => return Err(BundleError::InvalidFormat),
+        Some(n) => n,
+        None => MAX_LEGACY_V1_DECODED_BYTES,
+    };
     let decoder = StreamingDecoder::new(frame_bytes).map_err(zstd_err)?;
-    let mut raw = Vec::with_capacity(expected_raw_len.unwrap_or(0));
-    match expected_raw_len {
-        Some(expected) => {
-            decoder
-                .take(expected as u64 + 1)
-                .read_to_end(&mut raw)
-                .map_err(zstd_err)?;
-            if raw.len() != expected {
-                return Err(BundleError::InvalidFormat);
-            }
+    let mut raw = Vec::new();
+    let mut chunk = [0u8; 64 * 1024];
+    let mut reader = decoder.take((limit as u64) + 1);
+    loop {
+        let n = reader.read(&mut chunk).map_err(zstd_err)?;
+        if n == 0 {
+            break;
         }
-        None => {
-            let mut dec = decoder;
-            dec.read_to_end(&mut raw).map_err(zstd_err)?;
+        if raw.len().saturating_add(n) > limit {
+            return Err(BundleError::InvalidFormat);
         }
+        raw.try_reserve(n).map_err(|_| BundleError::InvalidFormat)?;
+        raw.extend_from_slice(&chunk[..n]);
+    }
+    if let Some(expected) = expected_raw_len
+        && raw.len() != expected
+    {
+        return Err(BundleError::InvalidFormat);
     }
     Ok(raw)
 }
@@ -206,7 +243,10 @@ pub fn unpack_blob_from_frame(
     byte_len: u32,
     expected_hash: &[u8; 32],
 ) -> Result<Vec<u8>, BundleError> {
-    if compressed_frame.len() != frame.comp_len as usize {
+    if frame.raw_len as usize > MAX_FRAME_RAW_DECODED_BYTES
+        || frame.comp_len as usize > MAX_FRAME_COMP_BYTES
+        || compressed_frame.len() != frame.comp_len as usize
+    {
         return Err(BundleError::InvalidFormat);
     }
     let local_end = local_offset
@@ -256,7 +296,9 @@ fn unpack_v1(
     if raw.len() < DIR_HEADER_LEN || &raw[0..8] != BUNDLE_MAGIC_V1 {
         return Err(BundleError::InvalidFormat);
     }
-    let (offset, len) = (byte_offset as usize, byte_len as usize);
+    let offset =
+        usize::try_from(byte_offset).map_err(|_| oob(usize::MAX, byte_len as usize, raw.len()))?;
+    let len = byte_len as usize;
     let end = offset
         .checked_add(len)
         .ok_or_else(|| oob(offset, len, raw.len()))?;

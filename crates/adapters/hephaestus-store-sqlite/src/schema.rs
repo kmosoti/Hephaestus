@@ -21,7 +21,8 @@ pub(crate) fn json_err(err: serde_json::Error) -> StoreError {
 
 pub(crate) fn init_schema(conn: &Connection) -> Result<(), StoreError> {
     conn.execute_batch(
-        "PRAGMA page_size = 16384;
+        "PRAGMA busy_timeout = 5000;
+         PRAGMA page_size = 16384;
          PRAGMA journal_mode = WAL;
          PRAGMA synchronous = NORMAL;
          PRAGMA foreign_keys = ON;

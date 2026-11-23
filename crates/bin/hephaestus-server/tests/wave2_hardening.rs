@@ -7,14 +7,16 @@ use axum::{Json, Router};
 use hephaestus_core::RepoId;
 use hephaestus_jj::{JjCommitInput, JjRepoService};
 use hephaestus_server::{
-    HephaestusEngine, HephaestusQuicClient, HephaestusQuicServer, QuicTlsIdentity,
-    build_http_router, build_quinn_server_config, ct_eq_32, validate_git_repo_segment,
+    HephaestusEngine, HephaestusQuicClient, HephaestusQuicServer, MAX_QUIC_FRAME_BYTES,
+    QuicTlsIdentity, build_authenticated_http_router, build_quinn_server_config, ct_eq_32,
+    validate_git_repo_segment,
 };
 use hephaestus_store::{ObjectBackend as _, PushWebhookEvent};
 use hephaestus_store_object::{
     HttpWebhookSink, ObjectStoreBackend, ObjectStoreConfig, PackedCasEngine,
 };
 use hephaestus_store_sqlite::{SqliteStore, restore_ltx_snapshot_zstd};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -128,45 +130,76 @@ async fn quic_streams_over_16mib_and_git_push_syncs_cas_webhook_and_ltx1_shipper
     let quic_addr = quic_srv.local_addr();
     tokio::spawn(quic_srv.serve(Arc::clone(&engine)));
 
+    let http_token = "wave2-hardening-bearer-token";
+    let http_token_hash: [u8; 32] = Sha256::digest(http_token.as_bytes()).into();
     let http_l = TcpListener::bind("[::1]:0").await.unwrap();
     let http_addr = http_l.local_addr().unwrap();
     let http_engine = Arc::clone(&engine);
     tokio::spawn(async move {
-        let _ = axum::serve(http_l, build_http_router(http_engine)).await;
+        let _ = axum::serve(
+            http_l,
+            build_authenticated_http_router(http_engine, http_token_hash),
+        )
+        .await;
     });
 
-    // 1. Upload + download an 18 MiB blob over chunked QUIC streaming (> old 16 MiB cap!).
+    // 1. Upload + download a 15 MiB multi-chunk blob over QUIC streaming (<= 16 MiB cap),
+    //    and confirm > 16 MiB is rejected.
     let qcli = HephaestusQuicClient::connect(quic_addr, &client_id, server_id.fingerprint)
         .await
         .unwrap();
-    let big_18m = vec![0x5Au8; 18 * 1024 * 1024];
+    let big_15m = vec![0x5Au8; 15 * 1024 * 1024];
     let (big_hex, dup) = qcli
-        .put_blob(RepoId::parse("w2/big").unwrap(), big_18m.clone(), false)
+        .put_blob(RepoId::parse("w2/big").unwrap(), big_15m.clone(), false)
         .await
         .unwrap();
     assert!(!dup);
-    let got_18m = qcli.get_blob(&big_hex).await.unwrap().unwrap();
-    assert_eq!(got_18m.len(), big_18m.len());
-    assert_eq!(got_18m, big_18m);
+    let got_15m = qcli.get_blob(&big_hex).await.unwrap().unwrap();
+    assert_eq!(got_15m.len(), big_15m.len());
+    assert_eq!(got_15m, big_15m);
+    assert!(
+        qcli.put_blob(
+            RepoId::parse("w2/big").unwrap(),
+            vec![0x11u8; MAX_QUIC_FRAME_BYTES + 1],
+            false
+        )
+        .await
+        .is_err()
+    );
 
-    // 2. Reject invalid repo path on Git smart-HTTP with 400.
+    // 2. Reject invalid repo path on authenticated Git smart-HTTP with 400 (and anon with 401).
     let http = reqwest::Client::new();
+    let anon_resp = http
+        .get(format!(
+            "http://{http_addr}/git/alpha/info/refs?service=git-upload-pack"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anon_resp.status().as_u16(), 401);
     let bad_resp = http
         .get(format!(
             "http://{http_addr}/git/bad$repo/info/refs?service=git-upload-pack"
         ))
+        .bearer_auth(http_token)
         .send()
         .await
         .unwrap();
     assert_eq!(bad_resp.status().as_u16(), 400);
 
     // 3. Clone & push to multi-repo `/git/alpha`, confirming streaming receive-pack fires webhook + CAS sync.
+    let auth_header = format!("Authorization: Bearer {http_token}");
     let clone_dir = dir.join("clone-alpha");
     let git_url = format!("http://{http_addr}/git/alpha");
     assert!(
         Command::new("git")
             .env("GIT_TERMINAL_PROMPT", "0")
-            .args(["clone", &git_url])
+            .args([
+                "-c",
+                &format!("http.extraHeader={auth_header}"),
+                "clone",
+                &git_url,
+            ])
             .arg(&clone_dir)
             .output()
             .await
@@ -180,7 +213,13 @@ async fn quic_streams_over_16mib_and_git_push_syncs_cas_webhook_and_ltx1_shipper
         vec!["config", "user.email", "w2@example.invalid"],
         vec!["add", "new.txt"],
         vec!["commit", "-m", "wave2 push"],
-        vec!["push", "origin", "HEAD:main"],
+        vec![
+            "-c",
+            &format!("http.extraHeader={auth_header}"),
+            "push",
+            "origin",
+            "HEAD:main",
+        ],
     ] {
         let out = Command::new("git")
             .env("GIT_TERMINAL_PROMPT", "0")
@@ -201,12 +240,23 @@ async fn quic_streams_over_16mib_and_git_push_syncs_cas_webhook_and_ltx1_shipper
         "expected git-receive-pack to fire push webhook"
     );
 
-    // 4. Ship real Zstd-compressed "LTX1" snapshot via engine and verify end-to-end restore.
-    let ltx_oid = engine.ship_ltx_snapshot().await.unwrap();
+    // 4. Ship real Zstd-compressed "LTX1" snapshot via engine and verify end-to-end verified restore.
+    let receipt = engine.ship_ltx_snapshot_manifest().await.unwrap();
     assert_eq!(sqlite.ltx_snapshot_count().await.unwrap(), 1);
-    let uploaded = objects.get_bundle(&ltx_oid).await.unwrap();
+    let uploaded = objects.get_bundle(&receipt.object_id).await.unwrap();
     let restored = restore_ltx_snapshot_zstd(&uploaded, dir.join("restored.sqlite")).unwrap();
     assert_eq!(restored.page_size().unwrap(), 16_384);
+    let verified = engine
+        .restore_ltx_snapshot_verified(
+            &receipt.object_id,
+            &dir.join("verified-restored.sqlite"),
+            &receipt.raw_digest,
+            Some(&receipt.snapshot_digest),
+            Some(receipt.txid),
+        )
+        .await
+        .unwrap();
+    assert_eq!(verified.page_size().unwrap(), 16_384);
 
     let _ = std::fs::remove_dir_all(&dir);
 }

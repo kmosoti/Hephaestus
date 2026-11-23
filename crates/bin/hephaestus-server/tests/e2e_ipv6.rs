@@ -11,13 +11,14 @@ use hephaestus_core::{
 use hephaestus_jj::{JjCommitInput, JjRepoService};
 use hephaestus_server::{
     HephaestusEngine, HephaestusQuicClient, HephaestusQuicServer, QuicTlsIdentity,
-    build_http_router,
+    build_authenticated_http_router,
 };
 use hephaestus_store::{CommitRef, PushWebhookEvent};
 use hephaestus_store_object::{
     HttpWebhookSink, ObjectStoreBackend, ObjectStoreConfig, PackedCasEngine,
 };
 use hephaestus_store_sqlite::SqliteStore;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -111,10 +112,16 @@ async fn ipv6_quic_mtls_idempotency_logs_jj_git_bridge_and_webhooks_e2e() {
     let quic_addr = quic_srv.local_addr();
     tokio::spawn(quic_srv.serve(Arc::clone(&engine)));
 
+    let http_token = "e2e-daybreak-bearer-token-value";
+    let http_token_hash: [u8; 32] = Sha256::digest(http_token.as_bytes()).into();
     let http_l = TcpListener::bind("[::1]:0").await.unwrap();
     let http_addr = http_l.local_addr().unwrap();
     tokio::spawn(async move {
-        let _ = axum::serve(http_l, build_http_router(engine)).await;
+        let _ = axum::serve(
+            http_l,
+            build_authenticated_http_router(engine, http_token_hash),
+        )
+        .await;
     });
 
     // 4. Negative controls: untrusted client cert AND wrong server pin MUST be rejected.
@@ -266,8 +273,16 @@ async fn ipv6_quic_mtls_idempotency_logs_jj_git_bridge_and_webhooks_e2e() {
         .unwrap();
     assert_eq!(health["status"], "ok");
 
+    let anon_verify = http
+        .get(format!("http://{http_addr}/v1/decisions/e2e%2Frepo/verify"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(anon_verify.status().as_u16(), 401);
+
     let verify_dec: serde_json::Value = http
         .get(format!("http://{http_addr}/v1/decisions/e2e%2Frepo/verify"))
+        .bearer_auth(http_token)
         .send()
         .await
         .unwrap()
@@ -276,18 +291,19 @@ async fn ipv6_quic_mtls_idempotency_logs_jj_git_bridge_and_webhooks_e2e() {
         .unwrap();
     assert_eq!(verify_dec["verified_count"], 1);
 
+    let auth_hdr = format!("http.extraHeader=Authorization: Bearer {http_token}");
     let clone_dir = dir.join("git-clone");
     let git_url = format!("http://{http_addr}/git/demo");
     let clone_out = Command::new("git")
         .env("GIT_TERMINAL_PROMPT", "0")
-        .args(["clone", &git_url])
+        .args(["-c", &auth_hdr, "clone", &git_url])
         .arg(&clone_dir)
         .output()
         .await
         .unwrap();
     assert!(
         clone_out.status.success(),
-        "git clone failed: {}",
+        "git clone: {}",
         String::from_utf8_lossy(&clone_out.stderr)
     );
     assert_eq!(
@@ -302,7 +318,7 @@ async fn ipv6_quic_mtls_idempotency_logs_jj_git_bridge_and_webhooks_e2e() {
         vec!["config", "user.email", "git@example.invalid"],
         vec!["add", "pushed.txt"],
         vec!["commit", "-m", "smart-http push"],
-        vec!["push", "origin", "HEAD:main"],
+        vec!["-c", &auth_hdr, "push", "origin", "HEAD:main"],
     ] {
         let out = Command::new("git")
             .env("GIT_TERMINAL_PROMPT", "0")
@@ -313,8 +329,7 @@ async fn ipv6_quic_mtls_idempotency_logs_jj_git_bridge_and_webhooks_e2e() {
             .unwrap();
         assert!(
             out.status.success(),
-            "git {:?} failed: {}",
-            args,
+            "git {args:?}: {}",
             String::from_utf8_lossy(&out.stderr)
         );
     }

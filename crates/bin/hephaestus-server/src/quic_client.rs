@@ -1,6 +1,7 @@
 //! Ed25519 mTLS-pinned `quinn 0.11` IPv6 QUIC client.
 
-use crate::quic_proto::{QuicRequest, QuicResponse, read_stream_message, write_stream_message};
+use crate::quic_io::{read_stream_message, write_stream_message};
+use crate::quic_proto::{QuicRequest, QuicResponse};
 use crate::quic_tls::{QuicTlsIdentity, build_quinn_client_config};
 use hephaestus_core::{
     ChangeId, DecisionDraft, DecisionRecord, ObservationDraft, ObservationFilter,
@@ -164,14 +165,31 @@ impl HephaestusQuicClient {
         }
     }
 
-    /// Queries Decision Log records over QUIC.
+    /// Queries paginated Decision Log records over QUIC.
     pub async fn query_decisions(
         &self,
         repo_id: RepoId,
         change_id: Option<ChangeId>,
     ) -> Result<Vec<DecisionRecord>, String> {
+        self.query_decisions_paged(repo_id, change_id, None, None)
+            .await
+    }
+
+    /// Queries paginated Decision Log records over QUIC with explicit cursor and limit.
+    pub async fn query_decisions_paged(
+        &self,
+        repo_id: RepoId,
+        change_id: Option<ChangeId>,
+        since_seq: Option<u64>,
+        limit: Option<usize>,
+    ) -> Result<Vec<DecisionRecord>, String> {
         match self
-            .request(QuicRequest::QueryDecisions { repo_id, change_id })
+            .request(QuicRequest::QueryDecisions {
+                repo_id,
+                change_id,
+                since_seq,
+                limit,
+            })
             .await?
         {
             QuicResponse::Decisions { records } => Ok(records),

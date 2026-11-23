@@ -1,6 +1,7 @@
 //! QUIC request dispatch over [`HephaestusEngine`].
 
 use crate::engine::HephaestusEngine;
+use crate::error_map::sanitize_store_error;
 use crate::quic_proto::{QuicRequest, QuicResponse};
 use hephaestus_store::StoreError;
 
@@ -9,9 +10,10 @@ impl HephaestusEngine {
     pub async fn handle_quic(&self, req: QuicRequest) -> QuicResponse {
         match self.dispatch_quic(req).await {
             Ok(resp) => resp,
-            Err(err) => QuicResponse::Error {
-                message: err.to_string(),
-            },
+            Err(err) => {
+                let (_, _, safe_msg) = sanitize_store_error(&err);
+                QuicResponse::Error { message: safe_msg }
+            }
         }
     }
 
@@ -75,8 +77,15 @@ impl HephaestusEngine {
                     deduplicated,
                 })
             }
-            QuicRequest::QueryDecisions { repo_id, change_id } => {
-                let records = self.list_decisions(&repo_id, change_id.as_ref()).await?;
+            QuicRequest::QueryDecisions {
+                repo_id,
+                change_id,
+                since_seq,
+                limit,
+            } => {
+                let records = self
+                    .query_decisions(&repo_id, change_id.as_ref(), since_seq, limit)
+                    .await?;
                 Ok(QuicResponse::Decisions { records })
             }
             QuicRequest::VerifyDecisions { repo_id } => {
