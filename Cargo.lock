@@ -1733,7 +1733,7 @@ dependencies = [
 
 [[package]]
 name = "hephaestus-core"
-version = "0.1.0-alpha.1"
+version = "0.1.1-alpha.1"
 dependencies = [
  "base64 0.22.1",
  "blake3",
@@ -1746,7 +1746,7 @@ dependencies = [
 
 [[package]]
 name = "hephaestus-jj"
-version = "0.1.0-alpha.1"
+version = "0.1.1-alpha.1"
 dependencies = [
  "async-trait",
  "futures",
@@ -1762,7 +1762,7 @@ dependencies = [
 
 [[package]]
 name = "hephaestus-server"
-version = "0.1.0-alpha.1"
+version = "0.1.1-alpha.1"
 dependencies = [
  "axum",
  "blake3",
@@ -1774,6 +1774,7 @@ dependencies = [
  "hephaestus-store-object",
  "hephaestus-store-sqlite",
  "hex",
+ "libc",
  "quinn",
  "rcgen",
  "reqwest",
@@ -1787,7 +1788,7 @@ dependencies = [
 
 [[package]]
 name = "hephaestus-store"
-version = "0.1.0-alpha.1"
+version = "0.1.1-alpha.1"
 dependencies = [
  "bytes",
  "hephaestus-core",
@@ -1797,7 +1798,7 @@ dependencies = [
 
 [[package]]
 name = "hephaestus-store-object"
-version = "0.1.0-alpha.1"
+version = "0.1.1-alpha.1"
 dependencies = [
  "axum",
  "bytes",
@@ -1812,7 +1813,7 @@ dependencies = [
 
 [[package]]
 name = "hephaestus-store-sqlite"
-version = "0.1.0-alpha.1"
+version = "0.1.1-alpha.1"
 dependencies = [
  "hephaestus-core",
  "hephaestus-store",
@@ -1824,7 +1825,7 @@ dependencies = [
 
 [[package]]
 name = "hephaestus-xtask"
-version = "0.1.0-alpha.1"
+version = "0.1.1-alpha.1"
 dependencies = [
  "flate2",
  "serde",

@@ -2,8 +2,9 @@
 
 use bytes::Bytes;
 use hephaestus_core::{
-    BlobDigest, BundleAccumulator, BundleError, parse_frame_directory_header,
-    unpack_blob_from_bundle, unpack_blob_from_frame,
+    BUNDLE_MAGIC_V2, BlobDigest, BundleAccumulator, BundleError, MAX_BUNDLE_DIR_BYTES,
+    MAX_FRAME_COMP_BYTES, MAX_FRAME_RAW_DECODED_BYTES, MAX_LEGACY_V1_DECODED_BYTES,
+    parse_frame_directory_header, unpack_blob_from_bundle, unpack_blob_from_frame,
 };
 use hephaestus_store::{BlobLocation, CatalogStats, CatalogStore, ObjectBackend, StoreError};
 use std::sync::Arc;
@@ -133,6 +134,9 @@ impl PackedCasEngine {
         let (dir, prefix) = match parse_frame_directory_header(&probe) {
             Ok(dir) => (dir, probe),
             Err(BundleError::TruncatedDirectory { required_bytes }) => {
+                if required_bytes > MAX_BUNDLE_DIR_BYTES {
+                    return Err(StoreError::Bundle(BundleError::InvalidFormat));
+                }
                 let full_dir = self
                     .objects
                     .get_range(object_id, 0..required_bytes as u64)
@@ -141,8 +145,21 @@ impl PackedCasEngine {
                 (dir, full_dir)
             }
             Err(BundleError::InvalidFormat) => {
-                // Legacy GRNB0001 single-stream fallback.
+                if probe.starts_with(BUNDLE_MAGIC_V2) {
+                    return Err(StoreError::Bundle(BundleError::InvalidFormat));
+                }
+                // Legacy GRNB0001 single-stream fallback with strict size ceiling.
+                let max_legacy_comp =
+                    (MAX_LEGACY_V1_DECODED_BYTES as u64).saturating_add(64 * 1024);
+                if let Some(meta) = self.objects.head_bundle(object_id).await?
+                    && meta.size_bytes > max_legacy_comp
+                {
+                    return Err(StoreError::Bundle(BundleError::InvalidFormat));
+                }
                 let compressed = self.objects.get_bundle(object_id).await?;
+                if compressed.len() as u64 > max_legacy_comp {
+                    return Err(StoreError::Bundle(BundleError::InvalidFormat));
+                }
                 return Ok(unpack_blob_from_bundle(
                     &compressed,
                     digest.as_bytes(),
@@ -154,6 +171,11 @@ impl PackedCasEngine {
         };
 
         let (frame, local_off) = dir.find_frame_for_slice(byte_offset, byte_len)?;
+        if frame.comp_len as usize > MAX_FRAME_COMP_BYTES
+            || frame.raw_len as usize > MAX_FRAME_RAW_DECODED_BYTES
+        {
+            return Err(StoreError::Bundle(BundleError::InvalidFormat));
+        }
         let comp_start = frame.comp_offset;
         let comp_end = comp_start
             .checked_add(u64::from(frame.comp_len))

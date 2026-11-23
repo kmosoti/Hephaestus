@@ -1,11 +1,11 @@
 //! Orthogonal append-only Observation Logs keyed by Jujutsu `(ChangeId, CommitId, OpId)`.
 
 use crate::cas::BlobDigest;
+use crate::chain_verify::ObservationChainVerifier;
 use crate::decision_log::{ChainError, GENESIS_HASH, update_len_prefixed};
 use crate::ids::{ChangeId, CommitId, OpId};
 use crate::jcs::canonicalize_json;
 use crate::mmr::Mmr;
-use alloc::collections::BTreeSet;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
@@ -141,7 +141,7 @@ pub struct ObservationFilter {
     pub limit: Option<usize>,
 }
 
-fn validate_observation_draft(draft: &ObservationDraft) -> Result<(), ChainError> {
+pub(crate) fn validate_observation_draft(draft: &ObservationDraft) -> Result<(), ChainError> {
     if draft.observation_id.trim().is_empty() {
         return Err(ChainError::EmptyField {
             field: "observation_id",
@@ -307,36 +307,9 @@ pub fn matches_observation_filter(record: &ObservationRecord, filter: &Observati
 
 /// Verifies contiguous sequence numbers, `prev_hash` linkage, uniqueness, BLAKE3 digests, and MMR roots.
 pub fn verify_observation_chain(records: &[ObservationRecord]) -> Result<(), ChainError> {
-    let mut expected_prev = GENESIS_HASH;
-    let mut seen_ids = BTreeSet::new();
-    let mut mmr = Mmr::new();
-    for (idx, rec) in records.iter().enumerate() {
-        let expected_seq = idx as u64;
-        if rec.seq != expected_seq {
-            return Err(ChainError::NonMonotonicSeq {
-                index: idx,
-                expected: expected_seq,
-                actual: rec.seq,
-            });
-        }
-        if rec.prev_hash != expected_prev {
-            return Err(ChainError::PrevHashMismatch { seq: rec.seq });
-        }
-        let draft = rec.as_draft();
-        validate_observation_draft(&draft)?;
-        if !seen_ids.insert(rec.observation_id.clone()) {
-            return Err(ChainError::DuplicateId {
-                id: rec.observation_id.clone(),
-            });
-        }
-        if rec.record_hash != compute_observation_hash(rec.seq, rec.prev_hash, &draft) {
-            return Err(ChainError::RecordHashMismatch { seq: rec.seq });
-        }
-        mmr.append(rec.record_hash);
-        if rec.mmr_root != mmr.root() {
-            return Err(ChainError::MmrRootMismatch { seq: rec.seq });
-        }
-        expected_prev = rec.record_hash;
+    let mut verifier = ObservationChainVerifier::new();
+    for rec in records {
+        verifier.step(rec)?;
     }
     Ok(())
 }

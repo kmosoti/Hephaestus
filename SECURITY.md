@@ -4,13 +4,13 @@ Hephaestus stores authoritative Jujutsu (`jj`) repository history, content-addre
 
 ## Supported Versions
 
-Hephaestus is in alpha (`0.1.0-alpha.1`). Only `main` and the latest alpha tag receive security fixes.
+Hephaestus is in alpha (`0.1.1-alpha.1`). Only `main` and the latest alpha tag receive security fixes.
 
 | Version | Supported |
 | --- | --- |
 | `main` | Yes |
-| Latest `0.1.0-alpha.*` release | Yes |
-| Older pre-releases | No |
+| Latest `0.1.1-alpha.*` release | Yes |
+| `0.1.0-alpha.1` and older pre-releases | No |
 
 ## Reporting a Vulnerability
 
@@ -29,8 +29,9 @@ Please include:
 In scope:
 
 - Ed25519 mTLS certificate pinning in `hephaestus-server`.
+- HTTP/1.1 & Git smart-HTTP Bearer token authentication (`--http-auth-token-file` with `O_NOFOLLOW`, `0o077` permission checks, constant-time SHA-256 verification), concurrency/body/process bounds, and sanitized error responses.
 - OAuth2 PKCE `drive.file` scope enforcement and `SecretString` redaction in `hephaestus-core` and `hephaestus-store-object`.
-- Cryptographic hash-chain and BLAKE3 integrity verification across `GRNB0002` bundles, Decision Logs, Observation Logs, and LTX snapshots.
+- Cryptographic hash-chain, RFC 8785 duplicate-key rejection, strict identifier deserialization, and BLAKE3 integrity/freshness verification across `GRNB0002`/`GRNB0001` bundles, Decision Logs, Observation Logs, and LTX snapshots.
 
 Out of scope:
 

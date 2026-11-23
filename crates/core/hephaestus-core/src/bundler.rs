@@ -22,6 +22,16 @@ pub const TARGET_BUNDLE_MIN_BYTES: usize = 4 * 1024 * 1024;
 pub const TARGET_BUNDLE_MAX_BYTES: usize = 32 * 1024 * 1024;
 /// Upper target for raw bytes per independent Zstd frame in `GRNB0002` bundles.
 pub const MAX_FRAME_RAW_BYTES: usize = 256 * 1024;
+/// Maximum number of frame descriptors allowed in a `GRNB0002` directory.
+pub const MAX_BUNDLE_FRAMES: usize = 65_536;
+/// Maximum byte length of a `GRNB0002` directory prefix (`12 + MAX_BUNDLE_FRAMES * 24`).
+pub const MAX_BUNDLE_DIR_BYTES: usize = DIR_HEADER_LEN + MAX_BUNDLE_FRAMES * FRAME_DESC_LEN;
+/// Hard ceiling on uncompressed bytes decoded from a single `GRNB0002` frame (`64 MiB`).
+pub const MAX_FRAME_RAW_DECODED_BYTES: usize = 64 * 1024 * 1024;
+/// Hard ceiling on compressed bytes read for a single `GRNB0002` frame (`64 MiB + 64 KiB`).
+pub const MAX_FRAME_COMP_BYTES: usize = MAX_FRAME_RAW_DECODED_BYTES + 64 * 1024;
+/// Hard ceiling on decompressed bytes for legacy `GRNB0001` fallback bundles (`64 MiB`).
+pub const MAX_LEGACY_V1_DECODED_BYTES: usize = 64 * 1024 * 1024;
 
 /// Legacy single-stream Zstd bundle magic (`GRNB0001`).
 pub const BUNDLE_MAGIC_V1: &[u8; 8] = b"GRNB0001";

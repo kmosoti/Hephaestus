@@ -1,8 +1,10 @@
 //! Local BLAKE3 CAS and port-backed (`CatalogStore` + `ObjectBackend`) drivers for `HephaestusBackend`.
 
 use hephaestus_core::{
-    BlobDigest, BundleAccumulator, BundleError, INLINE_BLOB_THRESHOLD,
-    parse_frame_directory_header, unpack_blob_from_bundle, unpack_blob_from_frame,
+    BUNDLE_MAGIC_V2, BlobDigest, BundleAccumulator, BundleError, INLINE_BLOB_THRESHOLD,
+    MAX_BUNDLE_DIR_BYTES, MAX_FRAME_COMP_BYTES, MAX_FRAME_RAW_DECODED_BYTES,
+    MAX_LEGACY_V1_DECODED_BYTES, parse_frame_directory_header, unpack_blob_from_bundle,
+    unpack_blob_from_frame,
 };
 use hephaestus_store::{BlobLocation, CatalogStore, ObjectBackend};
 use jj_lib::backend::{BackendError, BackendResult};
@@ -152,6 +154,9 @@ async fn fetch_packed_from_ports(
     let (dir, prefix) = match parse_frame_directory_header(&probe) {
         Ok(d) => (d, probe),
         Err(BundleError::TruncatedDirectory { required_bytes }) => {
+            if required_bytes > MAX_BUNDLE_DIR_BYTES {
+                return Err(other_err(BundleError::InvalidFormat.to_string()));
+            }
             let full = objects
                 .get_range(object_id, 0..required_bytes as u64)
                 .await
@@ -159,18 +164,39 @@ async fn fetch_packed_from_ports(
             let d = parse_frame_directory_header(&full).map_err(|e| other_err(e.to_string()))?;
             (d, full)
         }
-        Err(_) => {
+        Err(BundleError::InvalidFormat) => {
+            if probe.starts_with(BUNDLE_MAGIC_V2) {
+                return Err(other_err(BundleError::InvalidFormat.to_string()));
+            }
+            let max_legacy_comp = (MAX_LEGACY_V1_DECODED_BYTES as u64).saturating_add(64 * 1024);
+            if let Some(meta) = objects
+                .head_bundle(object_id)
+                .await
+                .map_err(|e| other_err(e.to_string()))?
+                && meta.size_bytes > max_legacy_comp
+            {
+                return Err(other_err(BundleError::InvalidFormat.to_string()));
+            }
             let full = objects
                 .get_bundle(object_id)
                 .await
                 .map_err(|e| other_err(e.to_string()))?;
+            if full.len() as u64 > max_legacy_comp {
+                return Err(other_err(BundleError::InvalidFormat.to_string()));
+            }
             return unpack_blob_from_bundle(&full, digest.as_bytes(), byte_offset, byte_len)
                 .map_err(|e| other_err(e.to_string()));
         }
+        Err(err) => return Err(other_err(err.to_string())),
     };
     let (frame, local_off) = dir
         .find_frame_for_slice(byte_offset, byte_len)
         .map_err(|e| other_err(e.to_string()))?;
+    if frame.comp_len as usize > MAX_FRAME_COMP_BYTES
+        || frame.raw_len as usize > MAX_FRAME_RAW_DECODED_BYTES
+    {
+        return Err(other_err(BundleError::InvalidFormat.to_string()));
+    }
     let comp_end = frame.comp_offset + u64::from(frame.comp_len);
     let frame_bytes = if comp_end <= prefix.len() as u64 {
         prefix.slice(frame.comp_offset as usize..comp_end as usize)

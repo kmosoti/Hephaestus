@@ -14,6 +14,9 @@ pub enum JcsError {
     /// Nesting exceeded maximum supported depth.
     #[error("JSON nesting depth exceeded")]
     MaxDepth,
+    /// Object contains duplicate member key.
+    #[error("duplicate JSON object key `{0}`")]
+    DuplicateKey(String),
 }
 
 const MAX_DEPTH: usize = 64;
@@ -253,11 +256,10 @@ impl<'a> Parser<'a> {
             }
             self.pos += 1;
             let val = self.parse_value(depth)?;
-            if let Some(existing) = entries.iter_mut().find(|(k, _)| k == &key) {
-                existing.1 = val;
-            } else {
-                entries.push((key, val));
+            if entries.iter().any(|(k, _)| k == &key) {
+                return Err(JcsError::DuplicateKey(key));
             }
+            entries.push((key, val));
             self.skip_ws();
             match self.peek() {
                 Some(b',') => self.pos += 1,

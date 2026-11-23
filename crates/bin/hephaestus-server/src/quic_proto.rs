@@ -1,5 +1,5 @@
-//! Chunked streaming wire framing for multiplexed QUIC streams across blobs, `jj` ops,
-//! Decision Log, and Observation Logs.
+//! Wire message types and framing bounds for multiplexed QUIC streams across blobs,
+//! `jj` ops, Decision Log, and Observation Logs.
 
 use hephaestus_core::{
     ChangeId, DecisionDraft, DecisionRecord, ObservationDraft, ObservationFilter,
@@ -12,10 +12,12 @@ use std::time::Duration;
 
 /// Maximum JSON header size per QUIC stream (1 MiB).
 pub const MAX_QUIC_HEADER_BYTES: usize = 1024 * 1024;
-/// Maximum streamed binary payload size per QUIC stream (64 MiB, exceeding 32 MiB bundles).
-pub const MAX_QUIC_FRAME_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum streamed binary payload size per QUIC stream (16 MiB).
+pub const MAX_QUIC_FRAME_BYTES: usize = 16 * 1024 * 1024;
 /// Streaming chunk size written/read per QUIC stream step (64 KiB).
 pub const QUIC_STREAM_CHUNK_BYTES: usize = 64 * 1024;
+/// Default absolute deadline for reading a single QUIC stream message.
+pub const DEFAULT_QUIC_STREAM_DEADLINE: Duration = Duration::from_secs(60);
 
 /// Operation discriminant carried on each bidirectional QUIC stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,12 +91,18 @@ pub enum QuicRequest {
         /// Unchained decision input.
         draft: DecisionDraft,
     },
-    /// Query decision records for `repo_id` (optionally filtered by `change_id`).
+    /// Query decision records for `repo_id` (optionally filtered and paginated).
     QueryDecisions {
         /// Repository identifier.
         repo_id: RepoId,
         /// Optional `ChangeId` filter.
         change_id: Option<ChangeId>,
+        /// Minimum inclusive sequence number (`seq >= since_seq`).
+        #[serde(default)]
+        since_seq: Option<u64>,
+        /// Maximum records to return (capped at `MAX_LOG_PAGE_LIMIT`).
+        #[serde(default)]
+        limit: Option<usize>,
     },
     /// Verify the full hash chain of `repo_id`'s Decision Log.
     VerifyDecisions {
@@ -212,82 +220,7 @@ pub enum QuicResponse {
     },
     /// Application-level error response.
     Error {
-        /// Human-readable error message.
+        /// Sanitized error message with reference identifier.
         message: String,
     },
-}
-
-/// Streams `[u32 header_len][header_json][u64 payload_len][chunked payload]` over a QUIC stream.
-pub async fn write_stream_message<T: Serialize>(
-    send: &mut quinn::SendStream,
-    header: &T,
-    payload: &[u8],
-) -> Result<(), String> {
-    let json_bytes = serde_json::to_vec(header).map_err(|e| format!("encode json: {e}"))?;
-    if json_bytes.len() > MAX_QUIC_HEADER_BYTES {
-        return Err(format!("QUIC header exceeds {MAX_QUIC_HEADER_BYTES} bytes"));
-    }
-    if payload.len() > MAX_QUIC_FRAME_BYTES {
-        return Err(format!("QUIC payload exceeds {MAX_QUIC_FRAME_BYTES} bytes"));
-    }
-    send.write_all(&(json_bytes.len() as u32).to_be_bytes())
-        .await
-        .map_err(|e| format!("quic write hdr_len: {e}"))?;
-    send.write_all(&json_bytes)
-        .await
-        .map_err(|e| format!("quic write hdr: {e}"))?;
-    send.write_all(&(payload.len() as u64).to_be_bytes())
-        .await
-        .map_err(|e| format!("quic write payload_len: {e}"))?;
-    for chunk in payload.chunks(QUIC_STREAM_CHUNK_BYTES) {
-        send.write_all(chunk)
-            .await
-            .map_err(|e| format!("quic write chunk: {e}"))?;
-    }
-    send.finish().map_err(|e| format!("quic finish: {e}"))
-}
-
-async fn read_exact_timed(
-    recv: &mut quinn::RecvStream,
-    buf: &mut [u8],
-    timeout: Duration,
-) -> Result<(), String> {
-    tokio::time::timeout(timeout, recv.read_exact(buf))
-        .await
-        .map_err(|_| "quic stream read timed out".to_owned())?
-        .map_err(|e| format!("quic read_exact: {e}"))
-}
-
-/// Reads `[u32 header_len][header_json][u64 payload_len][chunked payload]` with per-chunk timeouts.
-pub async fn read_stream_message<T: for<'de> Deserialize<'de>>(
-    recv: &mut quinn::RecvStream,
-    read_timeout: Duration,
-) -> Result<(T, Vec<u8>), String> {
-    let mut len_buf = [0u8; 4];
-    read_exact_timed(recv, &mut len_buf, read_timeout).await?;
-    let hdr_len = u32::from_be_bytes(len_buf) as usize;
-    if hdr_len == 0 || hdr_len > MAX_QUIC_HEADER_BYTES {
-        return Err(format!("invalid QUIC header length {hdr_len}"));
-    }
-    let mut hdr_buf = vec![0u8; hdr_len];
-    read_exact_timed(recv, &mut hdr_buf, read_timeout).await?;
-    let header: T =
-        serde_json::from_slice(&hdr_buf).map_err(|e| format!("decode QUIC json: {e}"))?;
-
-    let mut pay_len_buf = [0u8; 8];
-    read_exact_timed(recv, &mut pay_len_buf, read_timeout).await?;
-    let payload_len = usize::try_from(u64::from_be_bytes(pay_len_buf))
-        .map_err(|_| "QUIC payload length overflow".to_owned())?;
-    if payload_len > MAX_QUIC_FRAME_BYTES {
-        return Err(format!("QUIC payload exceeds {MAX_QUIC_FRAME_BYTES} bytes"));
-    }
-
-    let mut payload = vec![0u8; payload_len];
-    let mut offset = 0usize;
-    while offset < payload_len {
-        let end = (offset + QUIC_STREAM_CHUNK_BYTES).min(payload_len);
-        read_exact_timed(recv, &mut payload[offset..end], read_timeout).await?;
-        offset = end;
-    }
-    Ok((header, payload))
 }

@@ -22,6 +22,7 @@ hephaestus-store.workspace = true
 hephaestus-store-object.workspace = true
 hephaestus-store-sqlite.workspace = true
 hex.workspace = true
+libc.workspace = true
 quinn.workspace = true
 rcgen.workspace = true
 rustls.workspace = true

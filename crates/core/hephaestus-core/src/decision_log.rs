@@ -1,9 +1,9 @@
 //! Hash-chained Decision Log records keyed by Jujutsu `ChangeId` and `OpId`.
 
 use crate::cas::BlobDigest;
+use crate::chain_verify::DecisionChainVerifier;
 use crate::ids::{ChangeId, OpId};
 use crate::mmr::Mmr;
-use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec::Vec;
 use serde::{Deserialize, Serialize};
@@ -170,7 +170,7 @@ pub(crate) fn update_len_prefixed(hasher: &mut blake3::Hasher, bytes: &[u8]) {
     hasher.update(bytes);
 }
 
-fn validate_decision_draft(draft: &DecisionDraft) -> Result<(), ChainError> {
+pub(crate) fn validate_decision_draft(draft: &DecisionDraft) -> Result<(), ChainError> {
     if draft.decision_id.trim().is_empty() {
         return Err(ChainError::EmptyField {
             field: "decision_id",
@@ -297,44 +297,9 @@ pub fn append_decision_in_memory(
 
 /// Verifies contiguous sequence numbers, `prev_hash` linkage, uniqueness, BLAKE3 digests, and MMR roots.
 pub fn verify_decision_chain(records: &[DecisionRecord]) -> Result<(), ChainError> {
-    let mut expected_prev = GENESIS_HASH;
-    let mut seen_ids = BTreeSet::new();
-    let mut mmr = Mmr::new();
-    for (idx, rec) in records.iter().enumerate() {
-        let expected_seq = idx as u64;
-        if rec.seq != expected_seq {
-            return Err(ChainError::NonMonotonicSeq {
-                index: idx,
-                expected: expected_seq,
-                actual: rec.seq,
-            });
-        }
-        if rec.prev_hash != expected_prev {
-            return Err(ChainError::PrevHashMismatch { seq: rec.seq });
-        }
-        let draft = rec.as_draft();
-        validate_decision_draft(&draft)?;
-        if !seen_ids.insert(rec.decision_id.clone()) {
-            return Err(ChainError::DuplicateId {
-                id: rec.decision_id.clone(),
-            });
-        }
-        if let Some(target) = &rec.supersedes
-            && (target == &rec.decision_id || !seen_ids.contains(target))
-        {
-            return Err(ChainError::UnknownSupersedes {
-                decision_id: rec.decision_id.clone(),
-                target: target.clone(),
-            });
-        }
-        if rec.record_hash != compute_decision_hash(rec.seq, rec.prev_hash, &draft) {
-            return Err(ChainError::RecordHashMismatch { seq: rec.seq });
-        }
-        mmr.append(rec.record_hash);
-        if rec.mmr_root != mmr.root() {
-            return Err(ChainError::MmrRootMismatch { seq: rec.seq });
-        }
-        expected_prev = rec.record_hash;
+    let mut verifier = DecisionChainVerifier::new();
+    for rec in records {
+        verifier.step(rec)?;
     }
     Ok(())
 }

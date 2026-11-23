@@ -24,8 +24,25 @@ let
     ++ lib.optionals (cfg.webhookUrl != null) [ "--webhook-url" cfg.webhookUrl ]
     ++ lib.optionals (cfg.jjRepo != null) [ "--jj-repo" cfg.jjRepo ]
     ++ lib.optionals (cfg.tlsKeyPath != null) [ "--tls-key-path" cfg.tlsKeyPath ]
+    ++ lib.optionals (cfg.httpAuthTokenFile != null) [
+      "--http-auth-token-file"
+      "/run/credentials/hephaestus.service/http-auth-token"
+    ]
+    ++ lib.optionals cfg.allowUnauthenticatedLoopbackHttp [ "--allow-unauthenticated-loopback-http" ]
     ++ lib.optionals cfg.devEphemeral [ "--dev-ephemeral" ]
     ++ clientFpFlags;
+
+  isLoopbackHttp =
+    lib.hasPrefix "[::1]:" cfg.httpListenAddress
+    || lib.hasPrefix "127." cfg.httpListenAddress;
+
+  credentials =
+    lib.optionals (cfg.driveTokenFile != null) [
+      "drive-access-token:${cfg.driveTokenFile}"
+    ]
+    ++ lib.optionals (cfg.httpAuthTokenFile != null) [
+      "http-auth-token:${cfg.httpAuthTokenFile}"
+    ];
 in
 {
   options.services.hephaestus = {
@@ -91,9 +108,23 @@ in
     };
 
     driveTokenFile = lib.mkOption {
-      type = lib.types.nullOr lib.types.path;
+      type = lib.types.nullOr lib.types.str;
       default = null;
-      description = "Optional secret file containing a short-lived Drive OAuth access token loaded via systemd LoadCredential=drive-access-token.";
+      example = "/run/secrets/drive-access-token";
+      description = "Optional runtime secret file path (outside /nix/store) containing a short-lived Drive OAuth access token loaded via systemd LoadCredential=drive-access-token.";
+    };
+
+    httpAuthTokenFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "/run/secrets/hephaestus-http-token";
+      description = "Runtime secret file path (outside /nix/store) containing the HTTP Bearer auth token loaded via systemd LoadCredential=http-auth-token.";
+    };
+
+    allowUnauthenticatedLoopbackHttp = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = "Allow unauthenticated HTTP bridge only on loopback addresses without openFirewall (for local testing only; never use in production).";
     };
 
     webhookUrl = lib.mkOption {
@@ -131,6 +162,21 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = cfg.driveTokenFile == null || !(lib.hasPrefix "/nix/store/" cfg.driveTokenFile);
+        message = "services.hephaestus.driveTokenFile must be a runtime path outside /nix/store.";
+      }
+      {
+        assertion = cfg.httpAuthTokenFile == null || !(lib.hasPrefix "/nix/store/" cfg.httpAuthTokenFile);
+        message = "services.hephaestus.httpAuthTokenFile must be a runtime path outside /nix/store.";
+      }
+      {
+        assertion = cfg.httpAuthTokenFile != null || (cfg.allowUnauthenticatedLoopbackHttp && isLoopbackHttp && !cfg.openFirewall);
+        message = "services.hephaestus requires httpAuthTokenFile unless allowUnauthenticatedLoopbackHttp = true on a loopback address with openFirewall = false.";
+      }
+    ];
+
     networking.firewall = lib.mkIf cfg.openFirewall {
       allowedTCPPorts = [ (extractPort cfg.httpListenAddress) ];
       allowedUDPPorts = [ (extractPort cfg.quicListenAddress) ];
@@ -150,9 +196,7 @@ in
         ExecStart = lib.escapeShellArgs execArgs;
         Restart = "on-failure";
         RestartSec = "3s";
-        LoadCredential = lib.mkIf (cfg.driveTokenFile != null) [
-          "drive-access-token:${toString cfg.driveTokenFile}"
-        ];
+        LoadCredential = lib.mkIf (credentials != [ ]) credentials;
         LoadCredentialEncrypted = lib.mkIf (cfg.tlsKeyEncryptedFile != null) [
           "tls-ed25519.pem:${toString cfg.tlsKeyEncryptedFile}"
         ];

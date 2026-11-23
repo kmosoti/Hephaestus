@@ -7,16 +7,31 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
 
 jobs:
-  package-and-release:
-    name: Build, Verify, Attest, and Publish Release
+  build:
+    name: Build, Verify, and Package Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify commit ancestry on main and tag version match
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "${GITHUB_SHA}" refs/remotes/origin/main
+          pkg_ver="$(awk '/^\[workspace\.package\]/{in_pkg=1;next} /^\[/{in_pkg=0} in_pkg && /^version[[:space:]]*=/{gsub(/.*=[[:space:]]*"|".*/, ""); print; exit}' Cargo.toml)"
+          test -n "${pkg_ver}"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            test "${GITHUB_REF_NAME}" = "v${pkg_ver}"
+            test -f "docs/releases/${GITHUB_REF_NAME}.md"
+          fi
 
       - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
@@ -42,7 +57,9 @@ jobs:
           fi
 
       - name: Build .deb, .tar.zst, and SHA256SUMS
-        run: cargo xtask package-deb --out dist
+        run: |
+          cargo xtask package-deb --out dist
+          (cd dist && sha256sum -c SHA256SUMS)
 
       - name: Generate RELEASE-EVIDENCE.json
         run: |
@@ -81,6 +98,48 @@ jobs:
               }
             }' > dist/RELEASE-EVIDENCE.json
 
+      - name: Upload packaged release artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: hephaestus-release-dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Attest and Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Re-verify main ancestry and release metadata
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "${GITHUB_SHA}" refs/remotes/origin/main
+          pkg_ver="$(awk '/^\[workspace\.package\]/{in_pkg=1;next} /^\[/{in_pkg=0} in_pkg && /^version[[:space:]]*=/{gsub(/.*=[[:space:]]*"|".*/, ""); print; exit}' Cargo.toml)"
+          test -n "${pkg_ver}"
+          test "${GITHUB_REF_NAME}" = "v${pkg_ver}"
+          test -f "docs/releases/${GITHUB_REF_NAME}.md"
+
+      - name: Download verified release artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: hephaestus-release-dist
+          path: dist
+
+      - name: Verify artifact checksums
+        run: (cd dist && sha256sum -c SHA256SUMS)
+
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -91,9 +150,10 @@ jobs:
             dist/RELEASE-EVIDENCE.json
 
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
+          prerelease: true
+          body_path: docs/releases/${{ github.ref_name }}.md
           files: |
             dist/*.deb
             dist/*.tar.zst

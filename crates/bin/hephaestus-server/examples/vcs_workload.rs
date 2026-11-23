@@ -7,8 +7,8 @@ use hephaestus_core::{
 };
 use hephaestus_jj::{JjCommitInput, JjRepoService};
 use hephaestus_server::{
-    HephaestusEngine, HephaestusQuicClient, HephaestusQuicServer, QuicTlsIdentity,
-    build_http_router,
+    HephaestusEngine, HephaestusQuicClient, HephaestusQuicServer, HttpAuthMode, HttpBridgeConfig,
+    QuicTlsIdentity, build_http_router_with_config,
 };
 use hephaestus_store::CommitRef;
 use hephaestus_store_object::{
@@ -92,7 +92,17 @@ async fn main() {
     let http_l = TcpListener::bind("[::1]:0").await.unwrap();
     let http_addr = http_l.local_addr().unwrap();
     tokio::spawn(async move {
-        let _ = axum::serve(http_l, build_http_router(engine)).await;
+        let _ = axum::serve(
+            http_l,
+            build_http_router_with_config(
+                engine,
+                HttpBridgeConfig {
+                    auth: HttpAuthMode::AllowUnauthenticatedLoopback,
+                    ..HttpBridgeConfig::default()
+                },
+            ),
+        )
+        .await;
     });
 
     let qcli = HephaestusQuicClient::connect(quic_addr, &client_id, server_id.fingerprint)
