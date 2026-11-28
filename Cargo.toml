@@ -46,7 +46,7 @@ object_store = { version = "0.14.2", features = ["fs", "aws", "gcp"] }
 quinn = { version = "0.11.12", default-features = false, features = ["runtime-tokio", "rustls-ring", "log", "bloom"] }
 rcgen = { version = "0.14.10", default-features = false, features = ["crypto", "ring", "pem"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
-rusqlite = { version = "0.41.1", features = ["bundled", "backup"] }
+rusqlite = { version = "0.43.0", features = ["bundled", "backup"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 ruzstd = { version = "0.9.1", default-features = false, features = ["hash"] }
 serde = { version = "1.0.229", default-features = false, features = ["alloc", "derive"] }
