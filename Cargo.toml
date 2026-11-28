@@ -33,7 +33,7 @@ hephaestus-store-object = { path = "crates/adapters/hephaestus-store-object" }
 hephaestus-jj = { path = "crates/adapters/hephaestus-jj" }
 async-trait = "0.1.92"
 axum = "0.8.9"
-base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
+base64 = { version = "0.23.1", default-features = false, features = ["alloc"] }
 blake3 = { version = "1.8.7", default-features = false, features = ["pure"] }
 bytes = "1.11.1"
 flate2 = "1.1.11"
